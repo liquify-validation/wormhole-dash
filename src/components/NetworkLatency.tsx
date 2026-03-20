@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import { Clock, Zap } from 'lucide-react';
+import { Zap } from 'lucide-react';
 import type { Heartbeat } from '../types';
 
 interface Props {
@@ -82,16 +82,16 @@ export default function NetworkLatency({ heartbeats }: Props) {
       </div>
 
       {/* Latency bars */}
-      <div className="space-y-1.5 max-h-64 overflow-y-auto">
+      <div className="space-y-1.5">
         {stats.latencies.map((g) => {
           const maxBar = stats.maxLatency || 1;
           const pct = Math.min((g.latencyMs / maxBar) * 100, 100);
           const barColor = g.latencyMs < 5000 ? '#10b981' : g.latencyMs < 15000 ? '#f59e0b' : '#ef4444';
 
           return (
-            <div key={g.name} className="flex items-center gap-2 group">
+            <div key={g.name} className="flex items-center gap-2" title={`Uptime: ${g.bootDays.toFixed(0)} days`}>
               <span className="text-[10px] text-gray-400 w-28 truncate shrink-0">{g.name}</span>
-              <div className="flex-1 h-2 rounded-full bg-gray-800/50 overflow-hidden">
+              <div className="flex-1 min-w-0 h-2 rounded-full bg-gray-800/50 overflow-hidden">
                 <div
                   className="h-full rounded-full transition-all duration-300"
                   style={{ width: `${pct}%`, backgroundColor: barColor }}
@@ -100,10 +100,6 @@ export default function NetworkLatency({ heartbeats }: Props) {
               <span className="text-[10px] font-mono text-gray-500 w-12 text-right shrink-0">
                 {formatLatency(g.latencyMs)}
               </span>
-              <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                <Clock className="w-3 h-3 text-gray-600" />
-                <span className="text-[10px] text-gray-600">{g.bootDays.toFixed(0)}d up</span>
-              </div>
             </div>
           );
         })}
