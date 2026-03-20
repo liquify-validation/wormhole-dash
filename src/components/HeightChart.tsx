@@ -78,7 +78,7 @@ export default function HeightChart({ heartbeats }: Props) {
                 fontSize: '12px',
               }}
               itemStyle={{ color: '#d1d5db' }}
-              formatter={(value: number) => [`${value} guardians`, 'Coverage']}
+              formatter={(value) => [`${value} guardians`, 'Coverage']}
             />
             <Bar dataKey="guardians" radius={[0, 4, 4, 0]} barSize={16}>
               {data.map((entry) => (

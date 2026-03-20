@@ -25,7 +25,7 @@ services:
         VITE_API_URL: ""
     container_name: wormhole-frontend
     ports:
-      - "80:80"
+      - "3000:3000"
     depends_on:
       backend:
         condition: service_healthy

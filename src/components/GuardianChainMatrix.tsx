@@ -31,7 +31,7 @@ const STATUS_LABELS: Record<CellStatus, string> = {
 };
 
 export default function GuardianChainMatrix({ heartbeats }: Props) {
-  const { chainIds, guardianNames, matrix, maxHeights } = useMemo(() => {
+  const { chainIds, guardianNames, matrix } = useMemo(() => {
     // Collect all unique chain IDs
     const chainIdSet = new Set<number>();
     heartbeats.forEach((hb) => {

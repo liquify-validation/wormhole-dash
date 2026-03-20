@@ -78,7 +78,7 @@ export default function MessageVolumeChart({ hourlyCounts }: Props) {
                 borderRadius: '8px',
                 fontSize: '12px',
               }}
-              formatter={(value: number) => [`${value.toLocaleString()} messages`, 'Volume']}
+              formatter={(value) => [`${Number(value).toLocaleString()} messages`, 'Volume']}
             />
             <Area
               type="monotone"

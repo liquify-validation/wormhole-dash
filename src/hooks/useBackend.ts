@@ -10,8 +10,23 @@ import type {
   CrossChainFlow,
 } from '../utils/api';
 
-const WS_URL = import.meta.env.VITE_WS_URL || 'ws://localhost:8080/ws';
-const REST_URL = import.meta.env.VITE_API_URL || 'http://localhost:8080';
+function getDefaultWsUrl(): string {
+  if (typeof window !== 'undefined' && window.location.hostname !== 'localhost') {
+    const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    return `${proto}//${window.location.host}/ws`;
+  }
+  return 'ws://localhost:8080/ws';
+}
+
+function getDefaultRestUrl(): string {
+  if (typeof window !== 'undefined' && window.location.hostname !== 'localhost') {
+    return `${window.location.protocol}//${window.location.host}`;
+  }
+  return 'http://localhost:8080';
+}
+
+const WS_URL = import.meta.env.VITE_WS_URL || getDefaultWsUrl();
+const REST_URL = import.meta.env.VITE_API_URL || getDefaultRestUrl();
 
 interface BackendEndpoint {
   key: string;
