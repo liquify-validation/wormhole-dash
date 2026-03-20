@@ -49,8 +49,8 @@ Real-time monitoring dashboard for the Wormhole cross-chain network, guardians, 
 
 | Layer | Technologies |
 |-------|-------------|
-| **Frontend** | React 18, TypeScript, Vite 5, Tailwind CSS 3, Recharts, Lucide React, Axios |
-| **Backend** | Python, FastAPI, uvicorn, httpx, WebSocket |
+| **Frontend** | React 18+, TypeScript, Vite 5, Tailwind CSS 3, Recharts, Lucide React, Axios |
+| **Backend** | Python 3.8+, FastAPI, uvicorn, httpx, WebSocket |
 
 ## 🚀 Getting Started
 
