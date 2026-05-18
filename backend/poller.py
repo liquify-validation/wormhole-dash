@@ -69,15 +69,20 @@ def _parse_heartbeats(data: Any) -> List[Dict]:
     """Parse heartbeat response from various API formats."""
     heartbeats = []
 
+    def _extract(entry: Any) -> Optional[Dict]:
+        if not isinstance(entry, dict):
+            return None
+        # Guardian REST returns { rawHeartbeat: {...} }; older/alternate
+        # shapes use { verifiedHeartbeat: { heartbeat: {...} } }.
+        return (
+            entry.get("rawHeartbeat")
+            or entry.get("verifiedHeartbeat", {}).get("heartbeat")
+        )
+
     if isinstance(data, dict):
         if "entries" in data and isinstance(data["entries"], list):
-            # Guardian gRPC: { entries: [{ verifiedHeartbeat: { heartbeat: ... } }] }
             for entry in data["entries"]:
-                hb = (
-                    entry.get("verifiedHeartbeat", {}).get("heartbeat")
-                    if isinstance(entry, dict)
-                    else None
-                )
+                hb = _extract(entry)
                 if hb:
                     heartbeats.append(hb)
         elif "heartbeats" in data and isinstance(data["heartbeats"], list):
@@ -85,23 +90,39 @@ def _parse_heartbeats(data: Any) -> List[Dict]:
             heartbeats = [h for h in data["heartbeats"] if h]
     elif isinstance(data, list):
         for entry in data:
-            if isinstance(entry, dict):
-                hb = entry.get("verifiedHeartbeat", {}).get("heartbeat", entry)
-                if hb:
-                    heartbeats.append(hb)
+            hb = _extract(entry) or (entry if isinstance(entry, dict) else None)
+            if hb:
+                heartbeats.append(hb)
 
     heartbeats.sort(key=lambda h: h.get("nodeName", ""))
     return heartbeats
 
 
-async def _fetch_json(client: httpx.AsyncClient, url: str) -> Any:
+# HTTP clients. `_client_insecure` is used for hosts whose TLS cert SAN
+# doesn't match the request hostname (currently xlabs.xyz). Initialized
+# in start_polling().
+_client_strict: Optional[httpx.AsyncClient] = None
+_client_insecure: Optional[httpx.AsyncClient] = None
+
+
+def _pick_client(url: str) -> httpx.AsyncClient:
+    # guardian.{mainnet,testnet}.xlabs.xyz serves a cert whose only SAN is
+    # wormhole.mainnet.xlabs.xyz, so strict verification rejects it.
+    if "xlabs.xyz" in url:
+        assert _client_insecure is not None
+        return _client_insecure
+    assert _client_strict is not None
+    return _client_strict
+
+
+async def _fetch_json(url: str) -> Any:
     """Fetch JSON from a URL with error handling."""
-    resp = await client.get(url, timeout=15)
+    resp = await _pick_client(url).get(url, timeout=15)
     resp.raise_for_status()
     return resp.json()
 
 
-async def poll_heartbeats(client: httpx.AsyncClient, key: str, ep: dict):
+async def poll_heartbeats(key: str, ep: dict):
     """Poll heartbeats for a single endpoint."""
     while True:
         try:
@@ -110,7 +131,7 @@ async def poll_heartbeats(client: httpx.AsyncClient, key: str, ep: dict):
             else:
                 url = f"{ep['url']}/v1/heartbeats"
 
-            data = await _fetch_json(client, url)
+            data = await _fetch_json(url)
             heartbeats = _parse_heartbeats(data)
             await cache.set(key, "heartbeats", heartbeats)
             logger.debug(f"[{key}] Fetched {len(heartbeats)} heartbeats")
@@ -120,20 +141,20 @@ async def poll_heartbeats(client: httpx.AsyncClient, key: str, ep: dict):
         await asyncio.sleep(HEARTBEAT_INTERVAL)
 
 
-async def poll_guardian_set(client: httpx.AsyncClient, key: str, ep: dict):
+async def poll_guardian_set(key: str, ep: dict):
     """Poll guardian set info."""
     while True:
         try:
             if ep["type"] == "cloudfunction":
                 try:
-                    data = await _fetch_json(client, f"{ep['url']}/guardian-set-info")
+                    data = await _fetch_json(f"{ep['url']}/guardian-set-info")
                 except Exception:
                     data = await _fetch_json(
-                        client, f"{GUARDIAN_RPC}/v1/guardianset/current"
+                        f"{GUARDIAN_RPC}/v1/guardianset/current"
                     )
             else:
                 data = await _fetch_json(
-                    client, f"{ep['url']}/v1/guardianset/current"
+                    f"{ep['url']}/v1/guardianset/current"
                 )
             await cache.set(key, "guardianSet", data)
         except Exception as e:
@@ -142,16 +163,16 @@ async def poll_guardian_set(client: httpx.AsyncClient, key: str, ep: dict):
         await asyncio.sleep(GOVERNOR_INTERVAL)
 
 
-async def poll_governor(client: httpx.AsyncClient, key: str, ep: dict):
+async def poll_governor(key: str, ep: dict):
     """Poll governor APIs (notionals, enqueued VAAs, tokens)."""
     base = ep["url"] if ep["type"] == "guardian" else GUARDIAN_RPC
 
     while True:
         try:
             notionals_data, enqueued_data, tokens_data = await asyncio.gather(
-                _fetch_json(client, f"{base}/v1/governor/available_notional_by_chain"),
-                _fetch_json(client, f"{base}/v1/governor/enqueued_vaas"),
-                _fetch_json(client, f"{base}/v1/governor/token_list"),
+                _fetch_json(f"{base}/v1/governor/available_notional_by_chain"),
+                _fetch_json(f"{base}/v1/governor/enqueued_vaas"),
+                _fetch_json(f"{base}/v1/governor/token_list"),
                 return_exceptions=True,
             )
 
@@ -182,17 +203,15 @@ async def poll_governor(client: httpx.AsyncClient, key: str, ep: dict):
         await asyncio.sleep(GOVERNOR_INTERVAL)
 
 
-async def poll_wormholescan(client: httpx.AsyncClient):
+async def poll_wormholescan():
     """Poll Wormholescan APIs (shared across all endpoints)."""
     while True:
         try:
             scorecards, hourly, txs, flows = await asyncio.gather(
-                _fetch_json(client, f"{WORMHOLESCAN}/scorecards"),
-                _fetch_json(client, f"{WORMHOLESCAN}/last-txs"),
-                _fetch_json(client, f"{WORMHOLESCAN}/transactions?page=0&pageSize=20"),
-                _fetch_json(
-                    client, f"{WORMHOLESCAN}/x-chain-activity?timeSpan=1d&by=notional"
-                ),
+                _fetch_json(f"{WORMHOLESCAN}/scorecards"),
+                _fetch_json(f"{WORMHOLESCAN}/last-txs"),
+                _fetch_json(f"{WORMHOLESCAN}/transactions?page=0&pageSize=20"),
+                _fetch_json(f"{WORMHOLESCAN}/x-chain-activity?timeSpan=1d&by=notional"),
                 return_exceptions=True,
             )
 
@@ -218,20 +237,26 @@ async def poll_wormholescan(client: httpx.AsyncClient):
 
 async def start_polling():
     """Start all background polling tasks."""
-    client = httpx.AsyncClient(
+    global _client_strict, _client_insecure
+    _client_strict = httpx.AsyncClient(
         headers={"User-Agent": "WormholeDashboard/1.0"},
         follow_redirects=True,
+    )
+    _client_insecure = httpx.AsyncClient(
+        headers={"User-Agent": "WormholeDashboard/1.0"},
+        follow_redirects=True,
+        verify=False,
     )
 
     tasks = []
 
     for key, ep in ENDPOINTS.items():
-        tasks.append(asyncio.create_task(poll_heartbeats(client, key, ep)))
-        tasks.append(asyncio.create_task(poll_guardian_set(client, key, ep)))
-        tasks.append(asyncio.create_task(poll_governor(client, key, ep)))
+        tasks.append(asyncio.create_task(poll_heartbeats(key, ep)))
+        tasks.append(asyncio.create_task(poll_guardian_set(key, ep)))
+        tasks.append(asyncio.create_task(poll_governor(key, ep)))
 
     # Wormholescan is global (not per-endpoint)
-    tasks.append(asyncio.create_task(poll_wormholescan(client)))
+    tasks.append(asyncio.create_task(poll_wormholescan()))
 
     logger.info(f"Started {len(tasks)} polling tasks for {len(ENDPOINTS)} endpoints")
     return tasks
