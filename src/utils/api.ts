@@ -143,74 +143,127 @@ export async function fetchGovernorTokens(endpoint: NetworkEndpoint): Promise<Go
   return fetchGovernorEntries<GovernorToken>(endpoint, '/v1/governor/token_list');
 }
 
-// ── Cross-guardian governor status (for quorum) ───────────────────────────
-// The public cloud functions aggregate every guardian's governor status,
-// which is what lets us tell whether a quorum of guardians has enqueued a
-// given VAA. This is env-scoped and independent of the selected endpoint.
-export function cloudFunctionBase(env: 'mainnet' | 'testnet'): string {
+/**
+ * Whether a fully-signed VAA exists for a message — i.e. a quorum of guardians
+ * (13 of 19) has signed it. This is exactly how the official dashboard fills its
+ * governor "Has Quorum?" column: it asks the guardian RPC for the signed VAA and
+ * treats its presence as quorum. An enqueued VAA that isn't signed yet returns
+ * not-found, which means "no quorum yet".
+ */
+export async function fetchSignedVAAExists(
+  endpoint: NetworkEndpoint,
+  emitterChain: number,
+  emitterAddress: string,
+  sequence: string,
+): Promise<boolean> {
+  const emitter = (emitterAddress || '').toLowerCase().replace(/^0x/, '');
+  for (const base of guardianRpcBases(endpoint)) {
+    try {
+      const res = await axios.get(`${base}/v1/signed_vaa/${emitterChain}/${emitter}/${sequence}`);
+      return !!res.data?.vaaBytes;
+    } catch (err) {
+      // A server response (e.g. 404 not-found) is a definitive "no quorum yet".
+      // Only fall through to the next base if the host was unreachable.
+      if (axios.isAxiosError(err) && err.response) return false;
+    }
+  }
+  return false;
+}
+
+// ── Delegated guardians ───────────────────────────────────────────────────
+// Many chains are watched by a designated subset of guardians ("delegate
+// guardians") with their own quorum, rather than the full canonical set. That
+// mapping lives in an Ethereum-mainnet contract; the official dashboard reads it
+// directly. We do the same with a plain eth_call (no wallet/lib needed).
+const ETH_RPC = 'https://ethereum-rpc.publicnode.com';
+export const DELEGATED_GUARDIAN_CONTRACT = '0x1462800febd49232798132e8c8b721aa86c4c209';
+const GET_CONFIG_SELECTOR = '0xc3f909d4'; // getConfig()
+
+export interface DelegatedGuardianConfig {
+  chainId: number;
+  threshold: number;
+  /** guardian addresses, lowercased, no 0x prefix */
+  keys: string[];
+}
+export type DelegatedGuardianConfigMap = Record<number, DelegatedGuardianConfig>;
+
+/** Decode the ABI response of getConfig(): tuple(uint16,uint32,uint8,address[])[]. */
+function decodeDelegatedConfig(hex: string): DelegatedGuardianConfigMap {
+  const map: DelegatedGuardianConfigMap = {};
+  if (!hex || hex.length < 64) return map;
+  const word = (i: number) => hex.slice(i * 64, i * 64 + 64);
+  const int = (i: number) => parseInt(word(i), 16);
+
+  const base = Math.floor(int(0) / 32); // word index of the array length
+  const n = int(base);
+  for (let k = 0; k < n; k++) {
+    const t = base + 1 + Math.floor(parseInt(word(base + 1 + k), 16) / 32); // tuple start
+    const chainId = int(t);
+    const threshold = int(t + 2);
+    const kbase = t + Math.floor(parseInt(word(t + 3), 16) / 32); // keys array start
+    const m = int(kbase);
+    const keys: string[] = [];
+    for (let j = 0; j < m; j++) {
+      keys.push(word(kbase + 1 + j).slice(24).toLowerCase()); // last 20 bytes = address
+    }
+    map[chainId] = { chainId, threshold, keys };
+  }
+  return map;
+}
+
+export async function fetchDelegatedGuardianConfig(
+  env: 'mainnet' | 'testnet',
+): Promise<DelegatedGuardianConfigMap> {
+  if (env !== 'mainnet') return {}; // contract is mainnet-only
+  const res = await axios.post(ETH_RPC, {
+    jsonrpc: '2.0',
+    id: 1,
+    method: 'eth_call',
+    params: [{ to: DELEGATED_GUARDIAN_CONTRACT, data: GET_CONFIG_SELECTOR }, 'latest'],
+  });
+  return decodeDelegatedConfig((res.data?.result || '0x').slice(2));
+}
+
+// ── Cross-guardian enqueued signers ───────────────────────────────────────
+// The env cloud function aggregates every guardian's governor status, so we can
+// see which guardians have each VAA enqueued (i.e. observed & signed it). Used to
+// show which delegate guardians haven't signed an enqueued VAA yet.
+function cloudFunctionBase(env: 'mainnet' | 'testnet'): string {
   return env === 'testnet'
     ? 'https://europe-west3-wormhole-message-db-testnet.cloudfunctions.net'
     : 'https://europe-west3-wormhole-message-db-mainnet.cloudfunctions.net';
 }
 
-export interface GovernorQuorumInfo {
-  /** `${chainId}:${normalizedEmitter}:${sequence}` -> # of guardians that enqueued it */
-  counts: Record<string, number>;
-  /** chainId -> # of guardians delegated to (reporting governor status for) that chain */
-  guardiansPerChain: Record<number, number>;
-  /** number of guardians reporting governor status */
-  reporting: number;
+/** Stable key joining a VAA across data sources (emitter zero-padding normalized away). */
+export function vaaKey(chainId: number, emitterAddress: string, sequence: string | number): string {
+  const emitter = (emitterAddress || '').toLowerCase().replace(/^0x/, '').replace(/^0+/, '');
+  return `${chainId}:${emitter}:${sequence}`;
 }
 
-/** Normalize an emitter address so the 0x-prefixed / zero-padded variants match. */
-function normalizeEmitter(addr: string): string {
-  return (addr || '').toLowerCase().replace(/^0x/, '').replace(/^0+/, '');
-}
-
-export function enqueuedKey(chainId: number, emitterAddress: string, sequence: string | number): string {
-  return `${chainId}:${normalizeEmitter(emitterAddress)}:${sequence}`;
-}
-
-interface RawGovernorStatusGuardian {
-  chains?: {
-    chainId?: number;
-    emitters?: {
-      emitterAddress?: string;
-      enqueuedVaas?: { sequence?: string | number }[];
-    }[];
-  }[];
-}
-
-export async function fetchGovernorQuorum(env: 'mainnet' | 'testnet'): Promise<GovernorQuorumInfo> {
+/** `${chainId}:${normEmitter}:${sequence}` -> guardian addresses (lowercased, no 0x) holding it enqueued. */
+export async function fetchGovernorSigners(
+  env: 'mainnet' | 'testnet',
+): Promise<Record<string, string[]>> {
   const res = await axios.get(`${cloudFunctionBase(env)}/governor-status`);
-  const guardians: RawGovernorStatusGuardian[] = res.data?.governorStatus || res.data?.entries || [];
-  const counts: Record<string, number> = {};
-  const guardiansPerChain: Record<number, number> = {};
+  const guardians = res.data?.governorStatus || res.data?.entries || [];
+  const byVaa: Record<string, string[]> = {};
 
-  for (const guardian of guardians) {
-    // Count each guardian at most once per VAA and once per chain it's delegated to.
-    const seenVaa = new Set<string>();
-    const seenChain = new Set<number>();
-    for (const chain of guardian?.chains || []) {
+  for (const g of guardians) {
+    const addr = (g?.guardianAddress || '').toLowerCase().replace(/^0x/, '');
+    if (!addr) continue;
+    for (const chain of g?.chains || []) {
       if (chain?.chainId === undefined) continue;
-      if (!seenChain.has(chain.chainId)) {
-        seenChain.add(chain.chainId);
-        guardiansPerChain[chain.chainId] = (guardiansPerChain[chain.chainId] || 0) + 1;
-      }
       for (const emitter of chain.emitters || []) {
         for (const vaa of emitter?.enqueuedVaas || []) {
           if (vaa?.sequence === undefined) continue;
-          const key = enqueuedKey(chain.chainId, emitter.emitterAddress || '', vaa.sequence);
-          if (!seenVaa.has(key)) {
-            seenVaa.add(key);
-            counts[key] = (counts[key] || 0) + 1;
-          }
+          const key = vaaKey(chain.chainId, emitter.emitterAddress || '', String(vaa.sequence));
+          if (!byVaa[key]) byVaa[key] = [];
+          if (!byVaa[key].includes(addr)) byVaa[key].push(addr);
         }
       }
     }
   }
-
-  return { counts, guardiansPerChain, reporting: guardians.length };
+  return byVaa;
 }
 
 // Wormholescan APIs

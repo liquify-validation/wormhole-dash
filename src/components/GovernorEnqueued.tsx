@@ -1,25 +1,23 @@
-import { useMemo } from 'react';
-import { ListChecks, Check, X, ExternalLink } from 'lucide-react';
-import type { GovernorEnqueuedVAA } from '../utils/api';
-import { enqueuedKey } from '../utils/api';
+import { useMemo, useState, useEffect } from 'react';
+import { ListChecks, Check, X, Loader2, ExternalLink } from 'lucide-react';
+import type { GovernorEnqueuedVAA, DelegatedGuardianConfigMap } from '../utils/api';
+import { fetchSignedVAAExists, vaaKey } from '../utils/api';
+import type { NetworkEndpoint } from '../types';
 import { getChainName } from '../types';
 import { shortenAddress } from '../utils/helpers';
 import ChainLogo from './ChainLogo';
 
 interface Props {
   enqueuedVAAs: GovernorEnqueuedVAA[];
-  /** `${chainId}:${normalizedEmitter}:${sequence}` -> # of guardians that enqueued it */
-  quorumCounts: Record<string, number>;
-  /** chainId -> # of guardians delegated to that chain (quorum is computed against this) */
-  guardiansPerChain: Record<number, number>;
-  /** fallback delegated-guardian count for chains missing from guardiansPerChain */
-  fallbackGuardianCount: number;
+  /** endpoint used to look up whether each VAA has a signed (quorum) VAA yet */
+  endpoint: NetworkEndpoint;
+  /** per-chain delegate guardian config (which guardians watch a chain + quorum) */
+  delegatedGuardians: DelegatedGuardianConfigMap;
+  /** vaaKey -> guardian addresses (lowercased, no 0x) that have signed/enqueued it */
+  signersByVaa: Record<string, string[]>;
+  /** guardian address (lowercased, no 0x) -> node name */
+  guardianNames: Record<string, string>;
   loading: boolean;
-}
-
-/** Guardians needed for quorum given the number delegated to a chain (⌊2/3·n⌋ + 1). */
-function quorumOf(delegated: number): number {
-  return Math.floor((delegated * 2) / 3) + 1;
 }
 
 function formatUSD(value: string | number): string {
@@ -28,11 +26,62 @@ function formatUSD(value: string | number): string {
   return `$${Math.round(num).toLocaleString()}`;
 }
 
+/**
+ * "Has Quorum?" cell — checks whether a fully-signed VAA exists for this message
+ * (a quorum of guardians has signed it). Re-checks periodically until it appears,
+ * mirroring the official dashboard's EnqueuedVAAChecker.
+ */
+function QuorumCell({ endpoint, vaa }: { endpoint: NetworkEndpoint; vaa: GovernorEnqueuedVAA }) {
+  const [hasQuorum, setHasQuorum] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout>;
+
+    const check = async () => {
+      const result = await fetchSignedVAAExists(
+        endpoint,
+        vaa.emitterChain,
+        vaa.emitterAddress,
+        vaa.sequence,
+      );
+      if (cancelled) return;
+      setHasQuorum(result);
+      // Keep polling until the signed VAA shows up.
+      if (!result) timer = setTimeout(check, 60000);
+    };
+
+    check();
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [endpoint, vaa.emitterChain, vaa.emitterAddress, vaa.sequence]);
+
+  if (hasQuorum === null) {
+    return (
+      <span title="Checking for a signed VAA…">
+        <Loader2 className="w-4 h-4 text-gray-500 animate-spin" />
+      </span>
+    );
+  }
+  return hasQuorum ? (
+    <span title="A signed VAA exists — a quorum of guardians has signed it">
+      <Check className="w-4 h-4 text-emerald-400" />
+    </span>
+  ) : (
+    <span title="No signed VAA yet — awaiting guardian quorum">
+      <X className="w-4 h-4 text-red-400" />
+    </span>
+  );
+}
+
 export default function GovernorEnqueued({
   enqueuedVAAs,
-  quorumCounts,
-  guardiansPerChain,
-  fallbackGuardianCount,
+  endpoint,
+  delegatedGuardians,
+  signersByVaa,
+  guardianNames,
   loading,
 }: Props) {
   // Overdue first, then soonest release time.
@@ -40,6 +89,7 @@ export default function GovernorEnqueued({
     () => [...enqueuedVAAs].sort((a, b) => a.releaseTime - b.releaseTime),
     [enqueuedVAAs],
   );
+  const signersLoaded = Object.keys(signersByVaa).length > 0;
 
   if (loading && enqueuedVAAs.length === 0) return null;
 
@@ -63,6 +113,7 @@ export default function GovernorEnqueued({
               <th className="px-3 py-2 text-left font-medium">Emitter</th>
               <th className="px-3 py-2 text-left font-medium">Sequence</th>
               <th className="px-3 py-2 text-center font-medium">Has Quorum?</th>
+              <th className="px-3 py-2 text-left font-medium">Delegate Signers</th>
               <th className="px-3 py-2 text-left font-medium">Transaction Hash</th>
               <th className="px-3 py-2 text-left font-medium">Release Time</th>
               <th className="px-3 py-2 text-right font-medium">Notional Value</th>
@@ -70,17 +121,18 @@ export default function GovernorEnqueued({
           </thead>
           <tbody className="divide-y divide-gray-800/30">
             {sorted.map((v, i) => {
-              const key = enqueuedKey(v.emitterChain, v.emitterAddress, v.sequence);
-              const count = quorumCounts[key];
-              const delegated = guardiansPerChain[v.emitterChain] || fallbackGuardianCount;
-              const threshold = quorumOf(delegated);
-              const hasQuorum = count !== undefined && count >= threshold;
               const releaseDate = new Date(v.releaseTime * 1000);
               const isOverdue = releaseDate.getTime() < Date.now();
               const vaaUrl = `https://wormholescan.io/#/tx/${v.emitterChain}/${v.emitterAddress}/${v.sequence}`;
 
+              // Delegate-guardian signing progress for this VAA.
+              const cfg = delegatedGuardians[v.emitterChain];
+              const signed = new Set(signersByVaa[vaaKey(v.emitterChain, v.emitterAddress, v.sequence)] || []);
+              const missing = cfg ? cfg.keys.filter((k) => !signed.has(k)) : [];
+              const signedCount = cfg ? cfg.keys.length - missing.length : 0;
+
               return (
-                <tr key={`${key}-${i}`} className="hover:bg-gray-800/20 transition-colors">
+                <tr key={`${v.emitterChain}-${v.emitterAddress}-${v.sequence}-${i}`} className="hover:bg-gray-800/20 transition-colors">
                   <td className="px-3 py-2">
                     <div className="flex items-center gap-2">
                       <ChainLogo chainId={v.emitterChain} size={16} />
@@ -106,20 +158,39 @@ export default function GovernorEnqueued({
                     </a>
                   </td>
                   <td className="px-3 py-2">
-                    <div
-                      className="flex justify-center"
-                      title={
-                        count === undefined
-                          ? 'No cross-guardian data'
-                          : `${count}/${threshold} enqueued (${delegated} guardians delegated to ${getChainName(v.emitterChain)})`
-                      }
-                    >
-                      {hasQuorum ? (
-                        <Check className="w-4 h-4 text-emerald-400" />
-                      ) : (
-                        <X className="w-4 h-4 text-red-400" />
-                      )}
+                    <div className="flex justify-center">
+                      <QuorumCell endpoint={endpoint} vaa={v} />
                     </div>
+                  </td>
+                  <td className="px-3 py-2">
+                    {!cfg ? (
+                      <span className="text-[10px] text-gray-600" title="Not a delegate-guardian chain">—</span>
+                    ) : !signersLoaded ? (
+                      <span className="text-[10px] text-gray-600">…</span>
+                    ) : (
+                      <div className="flex items-center gap-1.5 flex-wrap max-w-[260px]">
+                        <span
+                          className={`text-[10px] font-mono ${
+                            signedCount >= cfg.threshold ? 'text-emerald-400' : 'text-amber-400'
+                          }`}
+                          title={`${signedCount} signed of ${cfg.keys.length} delegates (quorum ${cfg.threshold})`}
+                        >
+                          {signedCount}/{cfg.keys.length}
+                        </span>
+                        {missing.map((k) => (
+                          <span
+                            key={k}
+                            className="text-[9px] px-1.5 py-0.5 rounded bg-red-500/10 text-red-400 border border-red-500/20 whitespace-nowrap"
+                            title={`${guardianNames[k] || k} has not signed`}
+                          >
+                            {guardianNames[k] || `${k.slice(0, 6)}…`}
+                          </span>
+                        ))}
+                        {missing.length === 0 && (
+                          <span className="text-[9px] text-emerald-400/80">all signed</span>
+                        )}
+                      </div>
+                    )}
                   </td>
                   <td className="px-3 py-2">
                     {v.txHash ? (

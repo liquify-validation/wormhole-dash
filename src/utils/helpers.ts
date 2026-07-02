@@ -1,23 +1,21 @@
 import { formatDistanceToNow } from 'date-fns';
 import type { Heartbeat } from '../types';
 
-/**
- * Number of guardians actively syncing each chain, keyed by chainId. A guardian
- * counts as active on a chain when its heartbeat reports a block height > 0 for
- * that chain — the same "healthy guardian" definition used in the chain overview.
- */
-export function getGuardiansPerChain(heartbeats: Heartbeat[]): Record<number, number> {
-  const counts: Record<number, number> = {};
+/** Map guardian address (lowercased, no 0x prefix) -> node name, from heartbeats. */
+export function getGuardianNames(heartbeats: Heartbeat[]): Record<string, string> {
+  const names: Record<string, string> = {};
   for (const hb of heartbeats) {
-    for (const net of hb.networks || []) {
-      if ((parseInt(net.height) || 0) > 0) {
-        counts[net.id] = (counts[net.id] || 0) + 1;
-      }
+    if (hb.guardianAddr) {
+      names[hb.guardianAddr.toLowerCase().replace(/^0x/, '')] = hb.nodeName || 'Unknown';
     }
   }
-  return counts;
+  return names;
 }
 
+/** Normalize a guardian address for cross-source matching (lowercased, no 0x prefix). */
+export function normGuardianAddr(addr: string): string {
+  return (addr || '').toLowerCase().replace(/^0x/, '');
+}
 export function timeAgo(timestamp: string | number): string {
   const ts = typeof timestamp === 'string' ? parseInt(timestamp) : timestamp;
   if (!ts || ts === 0) return 'Never';

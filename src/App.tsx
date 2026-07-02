@@ -6,8 +6,10 @@ import { useBackend } from './hooks/useBackend';
 import { useHeartbeats } from './hooks/useHeartbeats';
 import { useGuardianSet } from './hooks/useGuardianSet';
 import { useGovernor } from './hooks/useGovernor';
-import { useGovernorQuorum } from './hooks/useGovernorQuorum';
+import { useDelegatedGuardians } from './hooks/useDelegatedGuardians';
+import { useGovernorSigners } from './hooks/useGovernorSigners';
 import { usePerformanceHistory } from './hooks/usePerformanceHistory';
+import { getGuardianNames } from './utils/helpers';
 import { useWormholescan } from './hooks/useWormholescan';
 import Header from './components/Header';
 import StatsBar from './components/StatsBar';
@@ -89,10 +91,11 @@ export default function App() {
     ? { ...backend.wormholescan, loading: backend.loading }
     : directWormholescan;
 
-  // Cross-guardian governor status (for enqueued-VAA quorum). Env-scoped and
-  // independent of the selected endpoint / data source.
-  const governorQuorum = useGovernorQuorum(endpoint.env);
-  const guardianCount = guardianSet?.addresses.length || heartbeats.length || 19;
+  // Delegate-guardian config (per-chain guardian sets + quorum) and cross-guardian
+  // enqueued-VAA signers. Env-scoped and independent of the selected endpoint.
+  const delegatedGuardians = useDelegatedGuardians(endpoint.env);
+  const governorSigners = useGovernorSigners(endpoint.env);
+  const guardianNames = useMemo(() => getGuardianNames(heartbeats), [heartbeats]);
 
   const performance = usePerformanceHistory(heartbeats);
 
@@ -202,7 +205,11 @@ export default function App() {
         {tab === 'overview' && (
           <div className="space-y-6">
             <NetworkScorecards scorecards={wormholescan.scorecards} loading={wormholescan.loading} />
-            <ChainOverview heartbeats={heartbeats} />
+            <ChainOverview
+              heartbeats={heartbeats}
+              delegatedGuardians={delegatedGuardians}
+              guardianNames={guardianNames}
+            />
             <GuardianSetInfo
               guardianSet={guardianSet}
               heartbeats={heartbeats}
@@ -280,7 +287,11 @@ export default function App() {
         {/* Chains tab */}
         {tab === 'chains' && (
           <div className="space-y-6">
-            <ChainOverview heartbeats={heartbeats} />
+            <ChainOverview
+              heartbeats={heartbeats}
+              delegatedGuardians={delegatedGuardians}
+              guardianNames={guardianNames}
+            />
             <ChainDetailTable heartbeats={heartbeats} />
           </div>
         )}
@@ -295,9 +306,10 @@ export default function App() {
             />
             <GovernorEnqueued
               enqueuedVAAs={enqueuedVAAs}
-              quorumCounts={governorQuorum.counts}
-              guardiansPerChain={governorQuorum.guardiansPerChain}
-              fallbackGuardianCount={governorQuorum.reporting || guardianCount}
+              endpoint={endpoint}
+              delegatedGuardians={delegatedGuardians}
+              signersByVaa={governorSigners}
+              guardianNames={guardianNames}
               loading={govLoading}
             />
             <GovernorTokens tokens={tokens} loading={govLoading} />
