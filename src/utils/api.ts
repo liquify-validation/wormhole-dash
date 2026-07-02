@@ -40,8 +40,41 @@ export const NETWORK_ENDPOINTS: NetworkEndpoint[] = [
   },
 ];
 
-// Guardian RPC base URL for governor/guardian set APIs
-const GUARDIAN_RPC = 'https://guardian.mainnet.xlabs.xyz';
+// Browser-reachable guardian RPCs (valid TLS cert + CORS) used to serve the
+// /v1/governor/* and /v1/guardianset REST APIs when the selected endpoint is a
+// cloud function (cloud functions don't expose those REST endpoints). The xlabs
+// hosts are intentionally excluded: their TLS cert SAN doesn't match the request
+// host, so the browser rejects them (the backend poller bypasses this with an
+// insecure client, but the browser can't).
+const GUARDIAN_RPC_FALLBACK: Record<'mainnet' | 'testnet', string[]> = {
+  mainnet: [
+    'https://wormhole-v2-mainnet-api.mcf.rocks',
+    'https://wormhole-v2-mainnet-api.chainlayer.network',
+  ],
+  testnet: ['https://guardian.testnet.xlabs.xyz'],
+};
+
+/** Ordered list of guardian RPC bases to try for REST governor/guardianset calls. */
+function guardianRpcBases(endpoint: NetworkEndpoint): string[] {
+  return endpoint.type === 'guardian'
+    ? [endpoint.endpoint]
+    : GUARDIAN_RPC_FALLBACK[endpoint.env];
+}
+
+/** GET a `{ entries: [...] }` governor endpoint, trying each fallback base in order. */
+async function fetchGovernorEntries<T>(endpoint: NetworkEndpoint, path: string): Promise<T[]> {
+  const bases = guardianRpcBases(endpoint);
+  let lastErr: unknown;
+  for (const base of bases) {
+    try {
+      const res = await axios.get(`${base}${path}`);
+      return res.data?.entries || [];
+    } catch (err) {
+      lastErr = err;
+    }
+  }
+  throw lastErr ?? new Error('No reachable guardian RPC for governor data');
+}
 
 export async function fetchHeartbeats(endpoint: NetworkEndpoint) {
   if (endpoint.type === 'cloudfunction') {
@@ -60,7 +93,7 @@ export async function fetchGuardianSet(endpoint: NetworkEndpoint) {
       const res = await axios.get(`${endpoint.endpoint}/guardian-set-info`);
       return res.data;
     } catch {
-      const res = await axios.get(`${GUARDIAN_RPC}/v1/guardianset/current`);
+      const res = await axios.get(`${guardianRpcBases(endpoint)[0]}/v1/guardianset/current`);
       return res.data;
     }
   } else {
@@ -92,21 +125,15 @@ export interface GovernorToken {
 }
 
 export async function fetchGovernorNotionals(endpoint: NetworkEndpoint): Promise<GovernorNotional[]> {
-  const base = endpoint.type === 'guardian' ? endpoint.endpoint : GUARDIAN_RPC;
-  const res = await axios.get(`${base}/v1/governor/available_notional_by_chain`);
-  return res.data?.entries || [];
+  return fetchGovernorEntries<GovernorNotional>(endpoint, '/v1/governor/available_notional_by_chain');
 }
 
 export async function fetchGovernorEnqueuedVAAs(endpoint: NetworkEndpoint): Promise<GovernorEnqueuedVAA[]> {
-  const base = endpoint.type === 'guardian' ? endpoint.endpoint : GUARDIAN_RPC;
-  const res = await axios.get(`${base}/v1/governor/enqueued_vaas`);
-  return res.data?.entries || [];
+  return fetchGovernorEntries<GovernorEnqueuedVAA>(endpoint, '/v1/governor/enqueued_vaas');
 }
 
 export async function fetchGovernorTokens(endpoint: NetworkEndpoint): Promise<GovernorToken[]> {
-  const base = endpoint.type === 'guardian' ? endpoint.endpoint : GUARDIAN_RPC;
-  const res = await axios.get(`${base}/v1/governor/token_list`);
-  return res.data?.entries || [];
+  return fetchGovernorEntries<GovernorToken>(endpoint, '/v1/governor/token_list');
 }
 
 // ── Cross-guardian governor status (for quorum) ───────────────────────────
