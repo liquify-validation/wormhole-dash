@@ -6,6 +6,7 @@ import { useBackend } from './hooks/useBackend';
 import { useHeartbeats } from './hooks/useHeartbeats';
 import { useGuardianSet } from './hooks/useGuardianSet';
 import { useGovernor } from './hooks/useGovernor';
+import { useGovernorQuorum } from './hooks/useGovernorQuorum';
 import { usePerformanceHistory } from './hooks/usePerformanceHistory';
 import { useWormholescan } from './hooks/useWormholescan';
 import Header from './components/Header';
@@ -20,6 +21,8 @@ import GovernorStatus from './components/GovernorStatus';
 import GuardianSetInfo from './components/GuardianSetInfo';
 import ChainDetailTable from './components/ChainDetailTable';
 import GovernorTokens from './components/GovernorTokens';
+import GovernorRateLimits from './components/GovernorRateLimits';
+import GovernorEnqueued from './components/GovernorEnqueued';
 import NetworkLatency from './components/NetworkLatency';
 import GuardianFeatures from './components/GuardianFeatures';
 import PerformanceMonitor from './components/PerformanceMonitor';
@@ -85,6 +88,12 @@ export default function App() {
   const wormholescan = usingBackend
     ? { ...backend.wormholescan, loading: backend.loading }
     : directWormholescan;
+
+  // Cross-guardian governor status (for enqueued-VAA quorum). Env-scoped and
+  // independent of the selected endpoint / data source.
+  const governorQuorum = useGovernorQuorum(endpoint.env);
+  const guardianCount = guardianSet?.addresses.length || heartbeats.length || 19;
+  const quorumThreshold = Math.floor((guardianCount * 2) / 3) + 1;
 
   const performance = usePerformanceHistory(heartbeats);
 
@@ -280,9 +289,15 @@ export default function App() {
         {/* Governor tab */}
         {tab === 'governor' && (
           <div className="space-y-6">
-            <GovernorStatus
+            <GovernorRateLimits
               notionals={notionals}
               enqueuedVAAs={enqueuedVAAs}
+              loading={govLoading}
+            />
+            <GovernorEnqueued
+              enqueuedVAAs={enqueuedVAAs}
+              quorumCounts={governorQuorum.counts}
+              quorumThreshold={quorumThreshold}
               loading={govLoading}
             />
             <GovernorTokens tokens={tokens} loading={govLoading} />

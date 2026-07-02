@@ -109,6 +109,68 @@ export async function fetchGovernorTokens(endpoint: NetworkEndpoint): Promise<Go
   return res.data?.entries || [];
 }
 
+// ── Cross-guardian governor status (for quorum) ───────────────────────────
+// The public cloud functions aggregate every guardian's governor status,
+// which is what lets us tell whether a quorum of guardians has enqueued a
+// given VAA. This is env-scoped and independent of the selected endpoint.
+export function cloudFunctionBase(env: 'mainnet' | 'testnet'): string {
+  return env === 'testnet'
+    ? 'https://europe-west3-wormhole-message-db-testnet.cloudfunctions.net'
+    : 'https://europe-west3-wormhole-message-db-mainnet.cloudfunctions.net';
+}
+
+export interface GovernorQuorumInfo {
+  /** `${chainId}:${normalizedEmitter}:${sequence}` -> # of guardians that enqueued it */
+  counts: Record<string, number>;
+  /** number of guardians reporting governor status */
+  reporting: number;
+}
+
+/** Normalize an emitter address so the 0x-prefixed / zero-padded variants match. */
+function normalizeEmitter(addr: string): string {
+  return (addr || '').toLowerCase().replace(/^0x/, '').replace(/^0+/, '');
+}
+
+export function enqueuedKey(chainId: number, emitterAddress: string, sequence: string | number): string {
+  return `${chainId}:${normalizeEmitter(emitterAddress)}:${sequence}`;
+}
+
+interface RawGovernorStatusGuardian {
+  chains?: {
+    chainId?: number;
+    emitters?: {
+      emitterAddress?: string;
+      enqueuedVaas?: { sequence?: string | number }[];
+    }[];
+  }[];
+}
+
+export async function fetchGovernorQuorum(env: 'mainnet' | 'testnet'): Promise<GovernorQuorumInfo> {
+  const res = await axios.get(`${cloudFunctionBase(env)}/governor-status`);
+  const guardians: RawGovernorStatusGuardian[] = res.data?.governorStatus || res.data?.entries || [];
+  const counts: Record<string, number> = {};
+
+  for (const guardian of guardians) {
+    // Count each guardian at most once per VAA.
+    const seen = new Set<string>();
+    for (const chain of guardian?.chains || []) {
+      if (chain?.chainId === undefined) continue;
+      for (const emitter of chain.emitters || []) {
+        for (const vaa of emitter?.enqueuedVaas || []) {
+          if (vaa?.sequence === undefined) continue;
+          const key = enqueuedKey(chain.chainId, emitter.emitterAddress || '', vaa.sequence);
+          if (!seen.has(key)) {
+            seen.add(key);
+            counts[key] = (counts[key] || 0) + 1;
+          }
+        }
+      }
+    }
+  }
+
+  return { counts, reporting: guardians.length };
+}
+
 // Wormholescan APIs
 const WORMHOLESCAN = 'https://api.wormholescan.io/api/v1';
 
