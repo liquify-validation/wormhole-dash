@@ -40,6 +40,13 @@ export const NETWORK_ENDPOINTS: NetworkEndpoint[] = [
   },
 ];
 
+// Default selected endpoint. MCF is a valid-cert guardian RPC that serves the
+// full governor REST API directly in the browser (unlike the cloud function,
+// whose governor fallback path the browser can't reach).
+export const DEFAULT_ENDPOINT: NetworkEndpoint =
+  NETWORK_ENDPOINTS.find((e) => e.endpoint === 'https://wormhole-v2-mainnet-api.mcf.rocks') ??
+  NETWORK_ENDPOINTS[0];
+
 // Browser-reachable guardian RPCs (valid TLS cert + CORS) used to serve the
 // /v1/governor/* and /v1/guardianset REST APIs when the selected endpoint is a
 // cloud function (cloud functions don't expose those REST endpoints). The xlabs

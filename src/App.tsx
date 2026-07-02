@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect, useCallback } from 'react';
 import { AlertCircle, Wifi, WifiOff } from 'lucide-react';
 import type { NetworkEndpoint } from './types';
-import { NETWORK_ENDPOINTS } from './utils/api';
+import { DEFAULT_ENDPOINT } from './utils/api';
 import { useBackend } from './hooks/useBackend';
 import { useHeartbeats } from './hooks/useHeartbeats';
 import { useGuardianSet } from './hooks/useGuardianSet';
@@ -47,7 +47,7 @@ function getTabFromHash(): Tab {
 const USE_BACKEND = import.meta.env.VITE_USE_BACKEND === 'true';
 
 export default function App() {
-  const [endpoint, setEndpoint] = useState<NetworkEndpoint>(NETWORK_ENDPOINTS[0]);
+  const [endpoint, setEndpoint] = useState<NetworkEndpoint>(DEFAULT_ENDPOINT);
   const [search, setSearch] = useState('');
   const [view, setView] = useState<'cards' | 'table'>('cards');
   const [tab, setTab] = useState<Tab>(getTabFromHash);

@@ -75,7 +75,7 @@ export function useBackend() {
   const [state, setState] = useState<BackendState>({
     connected: false,
     endpoints: [],
-    selectedEndpoint: 'mainnet_cf',
+    selectedEndpoint: 'mainnet_mcf',
     heartbeats: [],
     guardianSet: null,
     governor: { notionals: [], enqueuedVAAs: [], tokens: [] },
