@@ -17,6 +17,16 @@ function formatUSD(value: string | number): string {
   return `$${Math.round(num).toLocaleString()}`;
 }
 
+/** Tooltip text listing the withheld (enqueued) transactions for a chain. */
+function withheldTooltip(list: GovernorEnqueuedVAA[]): string {
+  const header = `${list.length} withheld transaction${list.length > 1 ? 's' : ''}:`;
+  const lines = list
+    .slice(0, 8)
+    .map((v) => `• ${formatUSD(v.notionalValue)} — seq ${v.sequence} — releases ${new Date(v.releaseTime * 1000).toLocaleString()}`);
+  if (list.length > 8) lines.push(`…and ${list.length - 8} more`);
+  return [header, ...lines].join('\n');
+}
+
 export default function GovernorRateLimits({ notionals, enqueuedVAAs, loading }: Props) {
   // Withheld notional per chain = sum of that chain's enqueued VAA values.
   const withheldByChain = useMemo(() => {
@@ -27,14 +37,27 @@ export default function GovernorRateLimits({ notionals, enqueuedVAAs, loading }:
     return map;
   }, [enqueuedVAAs]);
 
-  // Enqueued count per chain, for the header badges.
-  const enqueuedByChain = useMemo(() => {
-    const map = new Map<number, number>();
+  // Enqueued (withheld) transactions per chain, biggest first — for badges + tooltip.
+  const stuckByChain = useMemo(() => {
+    const map = new Map<number, GovernorEnqueuedVAA[]>();
     for (const v of enqueuedVAAs) {
-      map.set(v.emitterChain, (map.get(v.emitterChain) || 0) + 1);
+      const arr = map.get(v.emitterChain);
+      if (arr) arr.push(v);
+      else map.set(v.emitterChain, [v]);
     }
-    return Array.from(map.entries()).sort((a, b) => a[0] - b[0]);
+    for (const arr of map.values()) {
+      arr.sort((a, b) => parseFloat(b.notionalValue || '0') - parseFloat(a.notionalValue || '0'));
+    }
+    return map;
   }, [enqueuedVAAs]);
+
+  // Chains with withheld txs, sorted by chainId — for the header badges.
+  const enqueuedByChain = useMemo(
+    () => Array.from(stuckByChain.entries())
+      .map(([chainId, list]) => [chainId, list.length] as [number, number])
+      .sort((a, b) => a[0] - b[0]),
+    [stuckByChain],
+  );
 
   const sorted = useMemo(
     () => [...notionals].sort((a, b) => a.chainId - b.chainId),
@@ -101,6 +124,7 @@ export default function GovernorRateLimits({ notionals, enqueuedVAAs, loading }:
               const used = Math.max(limit - remaining, 0);
               const pct = limit > 0 ? (used / limit) * 100 : 0;
               const withheld = withheldByChain.get(n.chainId) || 0;
+              const stuck = stuckByChain.get(n.chainId) || [];
               const barColor = pct > 80 ? '#ef4444' : pct > 50 ? '#f59e0b' : '#10b981';
 
               return (
@@ -124,8 +148,9 @@ export default function GovernorRateLimits({ notionals, enqueuedVAAs, loading }:
                     {formatUSD(remaining)}
                   </td>
                   <td
+                    title={stuck.length ? withheldTooltip(stuck) : undefined}
                     className={`px-3 py-2 text-right text-xs font-mono whitespace-nowrap ${
-                      withheld > 0 ? 'text-amber-400' : 'text-gray-600'
+                      withheld > 0 ? 'text-amber-400 cursor-help underline decoration-dotted decoration-amber-400/40 underline-offset-2' : 'text-gray-600'
                     }`}
                   >
                     {formatUSD(withheld)}
