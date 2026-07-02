@@ -10,9 +10,16 @@ interface Props {
   enqueuedVAAs: GovernorEnqueuedVAA[];
   /** `${chainId}:${normalizedEmitter}:${sequence}` -> # of guardians that enqueued it */
   quorumCounts: Record<string, number>;
-  /** guardians required for quorum (e.g. 13 of 19) */
-  quorumThreshold: number;
+  /** chainId -> # of guardians delegated to that chain (quorum is computed against this) */
+  guardiansPerChain: Record<number, number>;
+  /** fallback delegated-guardian count for chains missing from guardiansPerChain */
+  fallbackGuardianCount: number;
   loading: boolean;
+}
+
+/** Guardians needed for quorum given the number delegated to a chain (⌊2/3·n⌋ + 1). */
+function quorumOf(delegated: number): number {
+  return Math.floor((delegated * 2) / 3) + 1;
 }
 
 function formatUSD(value: string | number): string {
@@ -24,7 +31,8 @@ function formatUSD(value: string | number): string {
 export default function GovernorEnqueued({
   enqueuedVAAs,
   quorumCounts,
-  quorumThreshold,
+  guardiansPerChain,
+  fallbackGuardianCount,
   loading,
 }: Props) {
   // Overdue first, then soonest release time.
@@ -64,7 +72,9 @@ export default function GovernorEnqueued({
             {sorted.map((v, i) => {
               const key = enqueuedKey(v.emitterChain, v.emitterAddress, v.sequence);
               const count = quorumCounts[key];
-              const hasQuorum = count !== undefined && count >= quorumThreshold;
+              const delegated = guardiansPerChain[v.emitterChain] || fallbackGuardianCount;
+              const threshold = quorumOf(delegated);
+              const hasQuorum = count !== undefined && count >= threshold;
               const releaseDate = new Date(v.releaseTime * 1000);
               const isOverdue = releaseDate.getTime() < Date.now();
               const vaaUrl = `https://wormholescan.io/#/tx/${v.emitterChain}/${v.emitterAddress}/${v.sequence}`;
@@ -101,7 +111,7 @@ export default function GovernorEnqueued({
                       title={
                         count === undefined
                           ? 'No cross-guardian data'
-                          : `${count}/${quorumThreshold} guardians enqueued`
+                          : `${count}/${threshold} enqueued (${delegated} guardians delegated to ${getChainName(v.emitterChain)})`
                       }
                     >
                       {hasQuorum ? (

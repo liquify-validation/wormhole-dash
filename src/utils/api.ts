@@ -156,6 +156,8 @@ export function cloudFunctionBase(env: 'mainnet' | 'testnet'): string {
 export interface GovernorQuorumInfo {
   /** `${chainId}:${normalizedEmitter}:${sequence}` -> # of guardians that enqueued it */
   counts: Record<string, number>;
+  /** chainId -> # of guardians delegated to (reporting governor status for) that chain */
+  guardiansPerChain: Record<number, number>;
   /** number of guardians reporting governor status */
   reporting: number;
 }
@@ -183,18 +185,24 @@ export async function fetchGovernorQuorum(env: 'mainnet' | 'testnet'): Promise<G
   const res = await axios.get(`${cloudFunctionBase(env)}/governor-status`);
   const guardians: RawGovernorStatusGuardian[] = res.data?.governorStatus || res.data?.entries || [];
   const counts: Record<string, number> = {};
+  const guardiansPerChain: Record<number, number> = {};
 
   for (const guardian of guardians) {
-    // Count each guardian at most once per VAA.
-    const seen = new Set<string>();
+    // Count each guardian at most once per VAA and once per chain it's delegated to.
+    const seenVaa = new Set<string>();
+    const seenChain = new Set<number>();
     for (const chain of guardian?.chains || []) {
       if (chain?.chainId === undefined) continue;
+      if (!seenChain.has(chain.chainId)) {
+        seenChain.add(chain.chainId);
+        guardiansPerChain[chain.chainId] = (guardiansPerChain[chain.chainId] || 0) + 1;
+      }
       for (const emitter of chain.emitters || []) {
         for (const vaa of emitter?.enqueuedVaas || []) {
           if (vaa?.sequence === undefined) continue;
           const key = enqueuedKey(chain.chainId, emitter.emitterAddress || '', vaa.sequence);
-          if (!seen.has(key)) {
-            seen.add(key);
+          if (!seenVaa.has(key)) {
+            seenVaa.add(key);
             counts[key] = (counts[key] || 0) + 1;
           }
         }
@@ -202,7 +210,7 @@ export async function fetchGovernorQuorum(env: 'mainnet' | 'testnet'): Promise<G
     }
   }
 
-  return { counts, reporting: guardians.length };
+  return { counts, guardiansPerChain, reporting: guardians.length };
 }
 
 // Wormholescan APIs

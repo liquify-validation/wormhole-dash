@@ -1,4 +1,22 @@
 import { formatDistanceToNow } from 'date-fns';
+import type { Heartbeat } from '../types';
+
+/**
+ * Number of guardians actively syncing each chain, keyed by chainId. A guardian
+ * counts as active on a chain when its heartbeat reports a block height > 0 for
+ * that chain — the same "healthy guardian" definition used in the chain overview.
+ */
+export function getGuardiansPerChain(heartbeats: Heartbeat[]): Record<number, number> {
+  const counts: Record<number, number> = {};
+  for (const hb of heartbeats) {
+    for (const net of hb.networks || []) {
+      if ((parseInt(net.height) || 0) > 0) {
+        counts[net.id] = (counts[net.id] || 0) + 1;
+      }
+    }
+  }
+  return counts;
+}
 
 export function timeAgo(timestamp: string | number): string {
   const ts = typeof timestamp === 'string' ? parseInt(timestamp) : timestamp;

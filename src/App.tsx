@@ -93,7 +93,6 @@ export default function App() {
   // independent of the selected endpoint / data source.
   const governorQuorum = useGovernorQuorum(endpoint.env);
   const guardianCount = guardianSet?.addresses.length || heartbeats.length || 19;
-  const quorumThreshold = Math.floor((guardianCount * 2) / 3) + 1;
 
   const performance = usePerformanceHistory(heartbeats);
 
@@ -297,7 +296,8 @@ export default function App() {
             <GovernorEnqueued
               enqueuedVAAs={enqueuedVAAs}
               quorumCounts={governorQuorum.counts}
-              quorumThreshold={quorumThreshold}
+              guardiansPerChain={governorQuorum.guardiansPerChain}
+              fallbackGuardianCount={governorQuorum.reporting || guardianCount}
               loading={govLoading}
             />
             <GovernorTokens tokens={tokens} loading={govLoading} />

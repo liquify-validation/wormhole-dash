@@ -7,7 +7,7 @@ import { fetchGovernorQuorum, GovernorQuorumInfo } from '../utils/api';
  * is independent of the selected endpoint / backend mode.
  */
 export function useGovernorQuorum(env: 'mainnet' | 'testnet') {
-  const [info, setInfo] = useState<GovernorQuorumInfo>({ counts: {}, reporting: 0 });
+  const [info, setInfo] = useState<GovernorQuorumInfo>({ counts: {}, guardiansPerChain: {}, reporting: 0 });
   const cancelRef = useRef(false);
 
   const load = useCallback(async () => {
