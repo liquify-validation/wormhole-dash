@@ -1,5 +1,5 @@
 import { useMemo, useState, useEffect } from 'react';
-import { ListChecks, Check, X, Loader2, ExternalLink } from 'lucide-react';
+import { ListChecks, Check, X, Loader2, ExternalLink, Copy } from 'lucide-react';
 import type { GovernorEnqueuedVAA, DelegatedGuardianConfigMap } from '../utils/api';
 import { fetchSignedVAAExists, vaaKey } from '../utils/api';
 import type { NetworkEndpoint } from '../types';
@@ -76,6 +76,44 @@ function QuorumCell({ endpoint, vaa }: { endpoint: NetworkEndpoint; vaa: Governo
   );
 }
 
+// Conventional guardiand admin socket path; operators adjust if theirs differs.
+const ADMIN_SOCKET = '/run/guardiand/admin.socket';
+
+/**
+ * The guardiand command an operator runs to reobserve a stuck message. The CLI
+ * accepts the tx hash as hex (0x…) or base58, so the raw txHash works for EVM and
+ * Solana/Sui alike.
+ */
+function reobserveCommand(v: GovernorEnqueuedVAA): string {
+  return `guardiand admin send-observation-request --socket ${ADMIN_SOCKET} ${v.emitterChain} ${v.txHash}`;
+}
+
+/** Copy-to-clipboard button for a VAA's reobserve command. */
+function ReobserveButton({ command }: { command: string }) {
+  const [copied, setCopied] = useState(false);
+
+  const onCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(command);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      // Clipboard unavailable (e.g. insecure context) — no-op.
+    }
+  };
+
+  return (
+    <button
+      onClick={onCopy}
+      title={`Copy reobserve command:\n${command}`}
+      className="inline-flex items-center gap-1 text-[10px] px-1.5 py-1 rounded-md bg-gray-800/60 border border-gray-700/40 text-gray-400 hover:text-cyan-300 hover:border-cyan-500/40 transition-colors"
+    >
+      {copied ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
+      {copied ? 'Copied' : 'Reobserve'}
+    </button>
+  );
+}
+
 export default function GovernorEnqueued({
   enqueuedVAAs,
   endpoint,
@@ -106,7 +144,7 @@ export default function GovernorEnqueued({
       </div>
 
       <div className="overflow-x-auto">
-        <table className="w-full min-w-[820px]">
+        <table className="w-full min-w-[1040px]">
           <thead>
             <tr className="text-[10px] uppercase tracking-wider text-gray-500">
               <th className="px-3 py-2 text-left font-medium">Chain</th>
@@ -117,6 +155,7 @@ export default function GovernorEnqueued({
               <th className="px-3 py-2 text-left font-medium">Transaction Hash</th>
               <th className="px-3 py-2 text-left font-medium">Release Time</th>
               <th className="px-3 py-2 text-right font-medium">Notional Value</th>
+              <th className="px-3 py-2 text-center font-medium">Reobserve</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-800/30">
@@ -216,6 +255,13 @@ export default function GovernorEnqueued({
                   <td className="px-3 py-2 text-right text-xs font-mono text-amber-400 whitespace-nowrap">
                     {formatUSD(v.notionalValue)}
                   </td>
+                  <td className="px-3 py-2 text-center">
+                    {v.txHash ? (
+                      <ReobserveButton command={reobserveCommand(v)} />
+                    ) : (
+                      <span className="text-[10px] text-gray-600">—</span>
+                    )}
+                  </td>
                 </tr>
               );
             })}
@@ -230,8 +276,12 @@ export default function GovernorEnqueued({
       </div>
 
       {sorted.length > 0 && (
-        <div className="mt-3 pt-3 border-t border-gray-800/40 text-[11px] text-gray-500">
-          {sorted.length} {sorted.length === 1 ? 'Row' : 'Rows'}
+        <div className="mt-3 pt-3 border-t border-gray-800/40 flex items-center justify-between gap-3 flex-wrap text-[11px] text-gray-500">
+          <span>{sorted.length} {sorted.length === 1 ? 'Row' : 'Rows'}</span>
+          <span className="text-gray-600">
+            Reobserve commands assume the admin socket at{' '}
+            <code className="text-gray-500">{ADMIN_SOCKET}</code> — adjust for your setup.
+          </span>
         </div>
       )}
     </div>
